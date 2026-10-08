@@ -5,28 +5,21 @@ function costOfRunning(i) {
 }
 const FLAT_COST = costOfRunning(0);
 
-function elevationFromAltitude(alt) {
-  if (!alt || alt.length < 2) return { gain: 0, loss: 0 };
-  let gain = 0, loss = 0;
-  for (let i = 1; i < alt.length; i++) {
-    const d = alt[i] - alt[i - 1];
-    if (d > 0) gain += d; else loss += -d;
-  }
-  return { gain, loss };
-}
-
-// Returns grade-adjusted pace in seconds/km, or null if streams are insufficient.
-function gradeAdjustedPaceSecPerKm(streams) {
+// Grade adjusted pace (sec/km) over stream index range [startIndex, endIndex], or
+// null if streams are insufficient. Called with the full range for the whole-activity
+// figure, and with each lap's start_index/end_index for a per-lap figure.
+function gradeAdjustedPaceSecPerKm(streams, startIndex = 0, endIndex = Infinity) {
   const dist = streams.distance?.data;
   const time = streams.time?.data;
   const grade = streams.grade_smooth?.data;
   const moving = streams.moving?.data;
   if (!dist || !time || !grade || dist.length < 2) return null;
 
+  const end = Math.min(endIndex, dist.length - 1);
   let adjustedDistance = 0;
   let movingTime = 0;
 
-  for (let i = 1; i < dist.length; i++) {
+  for (let i = Math.max(startIndex, 1); i <= end; i++) {
     const dt = time[i] - time[i - 1];
     if (dt <= 0) continue;
     if (moving && moving[i] === false) continue;
@@ -39,6 +32,15 @@ function gradeAdjustedPaceSecPerKm(streams) {
 
   if (adjustedDistance <= 0) return null;
   return movingTime / (adjustedDistance / 1000);
+}
+
+// Net elevation change (signed) over stream index range [startIndex, endIndex].
+function netElevation(altitude, startIndex, endIndex) {
+  if (!altitude || altitude.length === 0) return null;
+  const start = altitude[startIndex];
+  const end = altitude[Math.min(endIndex, altitude.length - 1)];
+  if (start == null || end == null) return null;
+  return Math.round(end - start);
 }
 
 export default async function handler(req, res) {
@@ -102,20 +104,26 @@ export default async function handler(req, res) {
     const streams = streamsRes.ok ? await streamsRes.json() : {};
 
     // Strava's plain-text copy (and its laps table) only ever reports elevation
-    // *gain* — never loss, even on downhill laps. Derive a true +/- split and a
-    // grade adjusted pace from the altitude/grade streams instead.
-    let elevation = null;
+    // *gain* — never a signed net change, even on downhill laps — and never grade
+    // adjusted pace. Derive both, overall and per-lap, from the altitude/grade streams.
+    const elevationGain = activity.total_elevation_gain != null
+      ? Math.round(activity.total_elevation_gain) : null;
     const gapSecPerKm = gradeAdjustedPaceSecPerKm(streams);
-    const { gain: rawGain, loss: rawLoss } = elevationFromAltitude(streams.altitude?.data);
-    if (rawGain > 0 || rawLoss > 0 || activity.total_elevation_gain != null) {
-      // Strava smooths total_elevation_gain; raw GPS altitude deltas run noisy/high.
-      // Scale loss by the same ratio so gain and loss stay on a consistent footing.
-      const gain = activity.total_elevation_gain ?? rawGain;
-      const smoothingRatio = rawGain > 0 ? gain / rawGain : 1;
-      elevation = { gain: Math.round(gain), loss: Math.round(rawLoss * smoothingRatio) };
-    }
 
-    return res.status(200).json({ activity, laps, elevation, gradeAdjustedPaceSecPerKm: gapSecPerKm });
+    const lapMetrics = Array.isArray(laps)
+      ? laps.map(lap => ({
+          elevation: netElevation(streams.altitude?.data, lap.start_index, lap.end_index),
+          gradeAdjustedPaceSecPerKm: gradeAdjustedPaceSecPerKm(streams, lap.start_index, lap.end_index),
+        }))
+      : [];
+
+    return res.status(200).json({
+      activity,
+      laps,
+      lapMetrics,
+      elevationGain,
+      gradeAdjustedPaceSecPerKm: gapSecPerKm,
+    });
   } catch (err) {
     return res.status(500).json({ error: `Failed to fetch activity: ${err.message}` });
   }
