@@ -33,10 +33,12 @@ Distance: 0.95 km
 Moving Time: 5:11
 Avg Pace: 5:26 /km
 Relative Effort: 5
-Elevation: 1 m
+Elevation Gain: +1 m
 Calories: 68
 Elapsed Time: 5:46
 ```
+
+There are two ways to get data in: paste the raw text (above), or use the **Activity URL** tab to fetch an activity directly from the Strava API (see below) — the only way to get a true +/- elevation split and a grade adjusted pace, since Strava's plain-text copy only ever exposes elevation *gain*.
 
 ## Features
 
@@ -45,7 +47,28 @@ Elapsed Time: 5:46
 - Strips UI noise lines (`Strava Labs`, `View Flybys`, etc.)
 - Includes lap table in a code block when present
 - One-click copy to clipboard
-- Works entirely in the browser — no data is sent anywhere
+- Optionally fetches an activity directly from the Strava API by URL, including real elevation gain/loss and grade adjusted pace
+- The paste path works entirely in the browser — no data is sent anywhere unless you use the Activity URL tab
+
+## Elevation gain/loss and grade adjusted pace
+
+Strava's copy-paste text — and even its own lap table — only ever reports elevation **gain**, never loss. This is true per-lap too: a lap's `elevation_gain` field is always ≥ 0 even when that lap is clearly downhill (confirmed against real activity data, where a lap with `avg_grade: -6%` still reported a positive `elevation_gain`). So there's no way to recover a true +/- split from pasted text.
+
+The **Activity URL** tab instead calls `api/strava.js`, a serverless function which:
+
+- Fetches the activity, its laps, and its altitude/grade/distance/time streams from the Strava API
+- Uses the activity's official `total_elevation_gain` for gain, and derives loss from the altitude stream — scaled by the same smoothing ratio Strava applies to gain, so the two stay consistent (verified: raw altitude deltas on a real loop route gave ~278m gain / ~280m loss against Strava's smoothed 229m gain; scaling loss by that same ratio gives ~230m, which matches gain as expected for a loop)
+- Computes grade adjusted pace from the grade/distance/time streams using the Minetti et al. (2002) cost-of-running-on-grade model
+
+This requires a Strava API application and three environment variables (set in Vercel, or in `.env.local` for local dev via `vercel dev`):
+
+```
+STRAVA_CLIENT_ID=...
+STRAVA_CLIENT_SECRET=...
+STRAVA_REFRESH_TOKEN=...
+```
+
+The refresh token needs `activity:read` (or `activity:read_all` for private activities) scope. Without these set, the Activity URL tab will show an error — the Paste stats tab works fine without it.
 
 ## Tech stack
 
@@ -92,6 +115,7 @@ Any subsequent `git push` to `main` will trigger an automatic redeploy.
 
 ## Usage
 
+**Paste stats tab:**
 1. Open a Strava activity in your browser
 2. Select all the text on the page (or just highlight the stats section) and copy it
 3. Paste into the left panel of the app
@@ -99,6 +123,11 @@ Any subsequent `git push` to `main` will trigger an automatic redeploy.
 5. Click **Copy** to copy it to your clipboard
 
 The app identifies the activity by the timestamp/location header line (e.g. `18:21 on Wednesday, 20 May 2026 Rotherham, United Kingdom`). If that line is missing from the pasted text, the parser won't be able to find the activity — make sure it's included.
+
+**Activity URL tab:**
+1. Copy the activity's URL from Strava (e.g. `https://www.strava.com/activities/12345678901`)
+2. Paste it into the field and click **Fetch activity** (requires the Strava API environment variables above)
+3. Click **Copy** to copy the formatted output, which includes real elevation gain/loss and grade adjusted pace
 
 ## Limitations
 

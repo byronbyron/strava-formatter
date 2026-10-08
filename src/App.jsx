@@ -42,6 +42,14 @@ function metresToKm(m) {
   return (m / 1000).toFixed(2) + " km";
 }
 
+function formatPaceFromSeconds(sec) {
+  if (sec == null || !isFinite(sec)) return null;
+  const total = Math.round(sec);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, "0")} /km`;
+}
+
 // Strava returns start_date_local as ISO string but in local time — parse manually
 function formatDateLocal(iso) {
   const [datePart, timePart] = iso.replace("Z", "").split("T");
@@ -54,22 +62,25 @@ function formatDateLocal(iso) {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")} on ${dow}, ${day} ${MONTHS[month - 1]} ${year}`;
 }
 
-function buildFromApi(activity, laps) {
+function buildFromApi(activity, laps, elevation, gradeAdjustedPaceSecPerKm) {
   const header = activity.start_date_local ? formatDateLocal(activity.start_date_local) : "";
   const title  = activity.name || "";
   const desc   = activity.description || "";
 
   const stats = {
-    distance:       activity.distance       ? metresToKm(activity.distance)             : null,
-    movingTime:     activity.moving_time    ? secsToTime(activity.moving_time)           : null,
-    avgPace:        activity.average_speed  ? mpsToMinKm(activity.average_speed)         : null,
-    relativeEffort: activity.suffer_score   ? String(activity.suffer_score)              : null,
-    elevation:      activity.total_elevation_gain != null
-                                            ? `${Math.round(activity.total_elevation_gain)} m` : null,
-    calories:       activity.calories       ? activity.calories.toLocaleString()         : null,
-    elapsedTime:    activity.elapsed_time   ? secsToTime(activity.elapsed_time)          : null,
+    distance:          activity.distance       ? metresToKm(activity.distance)             : null,
+    movingTime:        activity.moving_time    ? secsToTime(activity.moving_time)           : null,
+    avgPace:           activity.average_speed  ? mpsToMinKm(activity.average_speed)         : null,
+    // Strava's plain-text copy only ever exposes elevation *gain* — this fetch path is the
+    // only way to get a real +/- split, derived from the activity's altitude/grade streams.
+    gradeAdjustedPace: formatPaceFromSeconds(gradeAdjustedPaceSecPerKm),
+    relativeEffort:    activity.suffer_score   ? String(activity.suffer_score)              : null,
+    elevationGain:      elevation              ? `+${elevation.gain} m`                     : null,
+    elevationLoss:      elevation              ? `-${elevation.loss} m`                     : null,
+    calories:           activity.calories       ? activity.calories.toLocaleString()         : null,
+    elapsedTime:        activity.elapsed_time   ? secsToTime(activity.elapsed_time)          : null,
     // Strava stores running cadence as one-foot SPM — multiply by 2 for total
-    cadence:        activity.average_cadence
+    cadence:            activity.average_cadence
                                             ? `${Math.round(activity.average_cadence * 2)} spm` : null,
   };
 
@@ -181,14 +192,17 @@ function formatOutput({ header, title, description, stats, lapTable }) {
   if (title)       { lines.push(title); lines.push(""); }
   if (description) { lines.push(description); lines.push(""); }
 
-  if (stats.distance)       lines.push(`Distance: ${stats.distance}`);
-  if (stats.movingTime)     lines.push(`Moving Time: ${stats.movingTime}`);
-  if (stats.avgPace)        lines.push(`Avg Pace: ${stats.avgPace}`);
-  if (stats.relativeEffort) lines.push(`Relative Effort: ${stats.relativeEffort}`);
-  if (stats.elevation)      lines.push(`Elevation: ${stats.elevation}`);
-  if (stats.calories)       lines.push(`Calories: ${stats.calories}`);
-  if (stats.elapsedTime)    lines.push(`Elapsed Time: ${stats.elapsedTime}`);
-  if (stats.cadence)        lines.push(`Avg Cadence: ${stats.cadence}`);
+  if (stats.distance)          lines.push(`Distance: ${stats.distance}`);
+  if (stats.movingTime)        lines.push(`Moving Time: ${stats.movingTime}`);
+  if (stats.avgPace)           lines.push(`Avg Pace: ${stats.avgPace}`);
+  if (stats.gradeAdjustedPace) lines.push(`Grade Adjusted Pace: ${stats.gradeAdjustedPace}`);
+  if (stats.relativeEffort)    lines.push(`Relative Effort: ${stats.relativeEffort}`);
+  if (stats.elevationGain)     lines.push(`Elevation Gain: ${stats.elevationGain}`);
+  else if (stats.elevation)    lines.push(`Elevation Gain: +${stats.elevation}`);
+  if (stats.elevationLoss)     lines.push(`Elevation Loss: ${stats.elevationLoss}`);
+  if (stats.calories)          lines.push(`Calories: ${stats.calories}`);
+  if (stats.elapsedTime)       lines.push(`Elapsed Time: ${stats.elapsedTime}`);
+  if (stats.cadence)           lines.push(`Avg Cadence: ${stats.cadence}`);
   if (lapTable) { lines.push(""); lines.push("```"); lines.push(lapTable); lines.push("```"); }
 
   return lines.join("\n");
@@ -245,14 +259,17 @@ export default function App() {
   const preview = activeParsed ? (() => {
     const { header, title, description, stats, lapTable } = activeParsed;
     const rows = [];
-    if (stats.distance)       rows.push(["Distance",        stats.distance]);
-    if (stats.movingTime)     rows.push(["Moving Time",     stats.movingTime]);
-    if (stats.avgPace)        rows.push(["Avg Pace",        stats.avgPace]);
-    if (stats.relativeEffort) rows.push(["Relative Effort", stats.relativeEffort]);
-    if (stats.elevation)      rows.push(["Elevation",       stats.elevation]);
-    if (stats.calories)       rows.push(["Calories",        stats.calories]);
-    if (stats.elapsedTime)    rows.push(["Elapsed Time",    stats.elapsedTime]);
-    if (stats.cadence)        rows.push(["Avg Cadence",     stats.cadence]);
+    if (stats.distance)          rows.push(["Distance",             stats.distance]);
+    if (stats.movingTime)        rows.push(["Moving Time",          stats.movingTime]);
+    if (stats.avgPace)           rows.push(["Avg Pace",             stats.avgPace]);
+    if (stats.gradeAdjustedPace) rows.push(["Grade Adjusted Pace",  stats.gradeAdjustedPace]);
+    if (stats.relativeEffort)    rows.push(["Relative Effort",      stats.relativeEffort]);
+    if (stats.elevationGain)     rows.push(["Elevation Gain",       stats.elevationGain]);
+    else if (stats.elevation)    rows.push(["Elevation Gain",       `+${stats.elevation}`]);
+    if (stats.elevationLoss)     rows.push(["Elevation Loss",       stats.elevationLoss]);
+    if (stats.calories)          rows.push(["Calories",             stats.calories]);
+    if (stats.elapsedTime)       rows.push(["Elapsed Time",         stats.elapsedTime]);
+    if (stats.cadence)           rows.push(["Avg Cadence",          stats.cadence]);
     return { header, title, description, rows, lapTable };
   })() : null;
 
@@ -267,7 +284,7 @@ export default function App() {
       const res = await fetch(`/api/strava?activityId=${id}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
-      setUrlParsed(buildFromApi(data.activity, data.laps));
+      setUrlParsed(buildFromApi(data.activity, data.laps, data.elevation, data.gradeAdjustedPaceSecPerKm));
     } catch (e) {
       setError(e.message || "Something went wrong.");
     } finally {
