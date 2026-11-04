@@ -62,18 +62,42 @@ function formatDateLocal(iso) {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")} on ${dow}, ${day} ${MONTHS[month - 1]} ${year}`;
 }
 
-function buildFromApi(activity, laps, elevationGain, gradeAdjustedPaceSecPerKm, lapMetrics) {
+// Strava splits tags across two fields: Race/Long Run/Workout are in workout_type, the rest in tags.
+const WORKOUT_TYPE_TAGS = { 1: "Race", 2: "Long Run", 3: "Workout", 11: "Race", 12: "Workout" };
+
+function activityTags(activity) {
+  const tags = [
+    WORKOUT_TYPE_TAGS[activity.workout_type],
+    ...(activity.tags || []).map(t => String(t).replace(/([a-z])([A-Z])/g, "$1 $2")),
+    activity.commute ? "Commute" : null,
+  ].filter(Boolean);
+  return [...new Set(tags)].join(", ") || null;
+}
+
+function lapTime(s) {
+  return s < 60 ? `${s}s` : secsToTime(s);
+}
+
+// Strava's own GAP is only exposed per km split, so combine those into an overall figure.
+function overallGapSecPerKm(activity) {
+  const splits = (activity.splits_metric || []).filter(s => s.average_grade_adjusted_speed > 0);
+  const metres = splits.reduce((sum, s) => sum + s.distance, 0);
+  if (metres <= 0) return null;
+  const seconds = splits.reduce((sum, s) => sum + s.distance / s.average_grade_adjusted_speed, 0);
+  return seconds / (metres / 1000);
+}
+
+function buildFromApi(activity, laps, elevationGain, lapMetrics) {
   const header = activity.start_date_local ? formatDateLocal(activity.start_date_local) : "";
   const title  = activity.name || "";
   const desc   = activity.description || "";
 
   const stats = {
+    tag:               activityTags(activity),
     distance:          activity.distance       ? metresToKm(activity.distance)             : null,
     movingTime:        activity.moving_time    ? secsToTime(activity.moving_time)           : null,
     avgPace:           activity.average_speed  ? mpsToMinKm(activity.average_speed)         : null,
-    // Strava's plain-text copy only ever exposes elevation *gain* for the overall activity,
-    // and never grade adjusted pace at all — this fetch path derives both from streams.
-    gradeAdjustedPace: formatPaceFromSeconds(gradeAdjustedPaceSecPerKm),
+    gradeAdjustedPace: formatPaceFromSeconds(overallGapSecPerKm(activity)),
     relativeEffort:    activity.suffer_score   ? String(activity.suffer_score)              : null,
     elevationGain:     elevationGain != null   ? `+${elevationGain} m`                      : null,
     calories:          activity.calories       ? activity.calories.toLocaleString()         : null,
@@ -88,16 +112,12 @@ function buildFromApi(activity, laps, elevationGain, gradeAdjustedPaceSecPerKm, 
     const rows = laps.map((lap, i) => {
       const metrics  = lapMetrics?.[i];
       const idx      = String(lap.lap_index).padStart(3);
-      const dist     = metresToKm(lap.distance).padStart(9);
-      const time     = secsToTime(lap.moving_time).padStart(7);
-      const pace     = (mpsToMinKm(lap.average_speed) || "").padStart(10);
-      const gap      = (formatPaceFromSeconds(metrics?.gradeAdjustedPaceSecPerKm) || "").padStart(10);
-      const elev     = (metrics?.elevation != null
-                        ? `${metrics.elevation >= 0 ? "+" : ""}${metrics.elevation} m`
-                        : "").padStart(7);
-      const hr       = lap.average_heartrate
-                        ? `${Math.round(lap.average_heartrate)} bpm`.padStart(9)
-                        : "".padStart(9);
+      const dist     = metresToKm(lap.distance);
+      const time     = lapTime(lap.moving_time);
+      const pace     = mpsToMinKm(lap.average_speed) || "";
+      const gap      = formatPaceFromSeconds(metrics?.gradeAdjustedPaceSecPerKm) || "";
+      const elev     = metrics?.elevation != null ? `${metrics.elevation} m` : "";
+      const hr       = lap.average_heartrate ? `${Math.round(lap.average_heartrate)} bpm` : "";
       return `${idx}\t${dist}\t${time}\t${pace}\t${gap}\t${elev}\t${hr}`;
     });
     lapTable = "Lap\tDistance\tTime\tPace\tGAP\tElev\tHR\n" + rows.join("\n");
@@ -192,6 +212,7 @@ function formatOutput({ header, title, description, stats, lapTable }) {
   if (title)       { lines.push(title); lines.push(""); }
   if (description) { lines.push(description); lines.push(""); }
 
+  if (stats.tag)               lines.push(`Tag: ${stats.tag}`);
   if (stats.distance)          lines.push(`Distance: ${stats.distance}`);
   if (stats.movingTime)        lines.push(`Moving Time: ${stats.movingTime}`);
   if (stats.avgPace)           lines.push(`Avg Pace: ${stats.avgPace}`);
@@ -258,6 +279,7 @@ export default function App() {
   const preview = activeParsed ? (() => {
     const { header, title, description, stats, lapTable } = activeParsed;
     const rows = [];
+    if (stats.tag)               rows.push(["Tag",                  stats.tag]);
     if (stats.distance)          rows.push(["Distance",             stats.distance]);
     if (stats.movingTime)        rows.push(["Moving Time",          stats.movingTime]);
     if (stats.avgPace)           rows.push(["Avg Pace",             stats.avgPace]);
@@ -282,7 +304,7 @@ export default function App() {
       const res = await fetch(`/api/strava?activityId=${id}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
-      setUrlParsed(buildFromApi(data.activity, data.laps, data.elevationGain, data.gradeAdjustedPaceSecPerKm, data.lapMetrics));
+      setUrlParsed(buildFromApi(data.activity, data.laps, data.elevationGain, data.lapMetrics));
     } catch (e) {
       setError(e.message || "Something went wrong.");
     } finally {
@@ -360,7 +382,7 @@ export default function App() {
         .sf-preview-desc { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #666; margin-bottom: 14px; line-height: 1.6; }
         .sf-divider { height: 1px; background: linear-gradient(to right, #FC4C02, transparent); margin: 12px 0; opacity: 0.4; }
         .sf-section-label { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: #FC4C02; margin-bottom: 6px; opacity: 0.8; }
-        .sf-lap-table { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #888; white-space: pre; overflow-x: auto; background: #111; border: 1px solid #222; border-radius: 6px; padding: 10px 12px; margin-top: 8px; line-height: 1.7; }
+        .sf-lap-table { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #888; white-space: pre; tab-size: 10; overflow-x: auto; background: #111; border: 1px solid #222; border-radius: 6px; padding: 10px 12px; margin-top: 8px; line-height: 1.7; }
         .sf-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 10px; }
         .sf-empty-text { font-size: 12px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #2d2d2d; }
         .sf-error { padding: 10px 12px; background: rgba(248,113,113,0.08); border: 1px solid rgba(248,113,113,0.2); border-radius: 6px; font-size: 12px; color: #f87171; font-family: 'JetBrains Mono', monospace; line-height: 1.5; }

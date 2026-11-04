@@ -1,37 +1,40 @@
-// ─── Cost-of-running-on-grade model (Minetti et al. 2002) ────────────────────
-// C(i) = energy cost in J/(kg·m) to run at gradient i (fraction, e.g. 0.1 = 10%)
-function costOfRunning(i) {
-  return 155.4 * i ** 5 - 30.4 * i ** 4 - 43.3 * i ** 3 + 46.3 * i ** 2 + 19.5 * i + 3.6;
+// Strava doesn't publish its GAP model or return GAP for laps. These constants are fitted
+// to Strava's own GAP values, so re-check them against real activities if changing them.
+const GRADE_SMOOTHING_SAMPLES = 21;
+const MAX_GRADE = 0.3;
+
+// Flat-equivalent distance per metre run at gradient g (fraction, e.g. 0.1 = 10%).
+function gapFactor(g) {
+  const grade = Math.max(-MAX_GRADE, Math.min(MAX_GRADE, g));
+  return grade >= 0
+    ? 1 + 3.25 * grade + 15 * grade ** 2
+    : 1 + 2.25 * grade + 12 * grade ** 2;
 }
-const FLAT_COST = costOfRunning(0);
 
-// Grade adjusted pace (sec/km) over stream index range [startIndex, endIndex], or
-// null if streams are insufficient. Called with the full range for the whole-activity
-// figure, and with each lap's start_index/end_index for a per-lap figure.
-function gradeAdjustedPaceSecPerKm(streams, startIndex = 0, endIndex = Infinity) {
-  const dist = streams.distance?.data;
-  const time = streams.time?.data;
-  const grade = streams.grade_smooth?.data;
-  const moving = streams.moving?.data;
-  if (!dist || !time || !grade || dist.length < 2) return null;
+export function smoothGrades(grades) {
+  const half = Math.floor(GRADE_SMOOTHING_SAMPLES / 2);
+  const totals = [0];
+  for (const g of grades) totals.push(totals[totals.length - 1] + (g ?? 0));
+  return grades.map((_, i) => {
+    const from = Math.max(0, i - half);
+    const to = Math.min(grades.length, i + half + 1);
+    return (totals[to] - totals[from]) / (to - from);
+  });
+}
 
-  const end = Math.min(endIndex, dist.length - 1);
+// Estimated GAP (sec/km) between two stream indexes. Takes moving time from the lap rather
+// than the `moving` stream, which flags samples as stopped that Strava counts as moving.
+export function lapGapSecPerKm(distance, smoothedGrades, startIndex, endIndex, movingTime) {
+  if (!distance || !smoothedGrades || !movingTime) return null;
+  const end = Math.min(endIndex, distance.length - 1);
   let adjustedDistance = 0;
-  let movingTime = 0;
-
   for (let i = Math.max(startIndex, 1); i <= end; i++) {
-    const dt = time[i] - time[i - 1];
-    if (dt <= 0) continue;
-    if (moving && moving[i] === false) continue;
-    const dd = dist[i] - dist[i - 1];
-    if (dd <= 0) continue;
-    const g = ((grade[i] ?? 0) + (grade[i - 1] ?? 0)) / 2 / 100;
-    adjustedDistance += dd * (costOfRunning(g) / FLAT_COST);
-    movingTime += dt;
+    const metres = distance[i] - distance[i - 1];
+    if (metres <= 0) continue;
+    const grade = (smoothedGrades[i] + smoothedGrades[i - 1]) / 2 / 100;
+    adjustedDistance += metres * gapFactor(grade);
   }
-
-  if (adjustedDistance <= 0) return null;
-  return movingTime / (adjustedDistance / 1000);
+  return adjustedDistance > 0 ? movingTime / (adjustedDistance / 1000) : null;
 }
 
 // Net elevation change (signed) over stream index range [startIndex, endIndex].
@@ -87,7 +90,7 @@ export default async function handler(req, res) {
       fetch(`https://www.strava.com/api/v3/activities/${activityId}`, { headers }),
       fetch(`https://www.strava.com/api/v3/activities/${activityId}/laps`, { headers }),
       fetch(
-        `https://www.strava.com/api/v3/activities/${activityId}/streams?keys=altitude,grade_smooth,distance,time,moving&key_by_type=true`,
+        `https://www.strava.com/api/v3/activities/${activityId}/streams?keys=altitude,grade_smooth,distance&key_by_type=true`,
         { headers }
       ),
     ]);
@@ -103,17 +106,18 @@ export default async function handler(req, res) {
     const laps = lapsRes.ok ? await lapsRes.json() : [];
     const streams = streamsRes.ok ? await streamsRes.json() : {};
 
-    // Strava's plain-text copy (and its laps table) only ever reports elevation
-    // *gain* — never a signed net change, even on downhill laps — and never grade
-    // adjusted pace. Derive both, overall and per-lap, from the altitude/grade streams.
+    // The API's laps have no GAP and only a gain-only elevation figure, so derive both from streams.
     const elevationGain = activity.total_elevation_gain != null
       ? Math.round(activity.total_elevation_gain) : null;
-    const gapSecPerKm = gradeAdjustedPaceSecPerKm(streams);
+
+    const distance = streams.distance?.data;
+    const grades = streams.grade_smooth?.data;
+    const smoothedGrades = grades ? smoothGrades(grades) : null;
 
     const lapMetrics = Array.isArray(laps)
       ? laps.map(lap => ({
           elevation: netElevation(streams.altitude?.data, lap.start_index, lap.end_index),
-          gradeAdjustedPaceSecPerKm: gradeAdjustedPaceSecPerKm(streams, lap.start_index, lap.end_index),
+          gradeAdjustedPaceSecPerKm: lapGapSecPerKm(distance, smoothedGrades, lap.start_index, lap.end_index, lap.moving_time),
         }))
       : [];
 
@@ -122,7 +126,6 @@ export default async function handler(req, res) {
       laps,
       lapMetrics,
       elevationGain,
-      gradeAdjustedPaceSecPerKm: gapSecPerKm,
     });
   } catch (err) {
     return res.status(500).json({ error: `Failed to fetch activity: ${err.message}` });

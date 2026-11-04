@@ -38,7 +38,7 @@ Calories: 68
 Elapsed Time: 5:46
 ```
 
-There are two ways to get data in: paste the raw text (above), or use the **Activity URL** tab to fetch an activity directly from the Strava API (see below) — the only way to get a true +/- elevation split and a grade adjusted pace, since Strava's plain-text copy only ever exposes elevation *gain*.
+There are two ways to get data in: paste the raw text (above), or use the **Activity URL** tab to fetch an activity directly from the Strava API (see below).
 
 ## Features
 
@@ -47,18 +47,22 @@ There are two ways to get data in: paste the raw text (above), or use the **Acti
 - Strips UI noise lines (`Strava Labs`, `View Flybys`, etc.)
 - Includes lap table in a code block when present
 - One-click copy to clipboard
-- Optionally fetches an activity directly from the Strava API by URL, including real elevation gain/loss and grade adjusted pace
+- Optionally fetches an activity directly from the Strava API by URL, including its tags (Race, Long Run, Workout, Recovery, Commute), signed per-lap elevation and estimated grade adjusted pace
 - The paste path works entirely in the browser — no data is sent anywhere unless you use the Activity URL tab
 
-## Elevation gain/loss and grade adjusted pace
+## Per-lap elevation and grade adjusted pace
 
-Strava's copy-paste text — and even its own lap table — only ever reports elevation **gain**, never loss. This is true per-lap too: a lap's `elevation_gain` field is always ≥ 0 even when that lap is clearly downhill (confirmed against real activity data, where a lap with `avg_grade: -6%` still reported a positive `elevation_gain`). So there's no way to recover a true +/- split from pasted text.
+A lap table pasted from Strava's activity page is passed through as-is, including Strava's own `GAP` column and signed `Elev` values.
 
-The **Activity URL** tab instead calls `api/strava.js`, a serverless function which:
+The Strava API doesn't return either of those for laps: its lap `total_elevation_gain` is gain-only (never negative) and there's no GAP field. The **Activity URL** tab therefore calls `api/strava.js`, a serverless function which:
 
 - Fetches the activity, its laps, and its altitude/grade/distance/time streams from the Strava API
-- Uses the activity's official `total_elevation_gain` for gain, and derives loss from the altitude stream — scaled by the same smoothing ratio Strava applies to gain, so the two stay consistent (verified: raw altitude deltas on a real loop route gave ~278m gain / ~280m loss against Strava's smoothed 229m gain; scaling loss by that same ratio gives ~230m, which matches gain as expected for a loop)
-- Computes grade adjusted pace from the grade/distance/time streams using the Minetti et al. (2002) cost-of-running-on-grade model
+- Calculates each lap's signed `Elev` as its net altitude change, from the stream values at the lap's start and end
+- Estimates each lap's GAP from the grade and distance streams and the lap's moving time
+
+The overall **Grade Adjusted Pace** stat is Strava's own figure, combined from the grade-adjusted speed on each km split.
+
+**The per-lap GAP values are estimates.** Strava doesn't publish its model, so the app uses a formula fitted to Strava's values on two runs. On two other runs it was typically within about 3 s/km of Strava's per-km splits, and within 7 s/km at worst. Short, steep laps can be further out. Use the pasted lap table when you need Strava's exact per-lap figures.
 
 This requires a Strava API application and three environment variables (set in Vercel, or in `.env.local` for local dev via `vercel dev`):
 
@@ -127,7 +131,7 @@ The app identifies the activity by the timestamp/location header line (e.g. `18:
 **Activity URL tab:**
 1. Copy the activity's URL from Strava (e.g. `https://www.strava.com/activities/12345678901`)
 2. Paste it into the field and click **Fetch activity** (requires the Strava API environment variables above)
-3. Click **Copy** to copy the formatted output, which includes real elevation gain/loss and grade adjusted pace
+3. Click **Copy** to copy the formatted output, which includes the activity's tags, signed per-lap elevation and estimated grade adjusted pace
 
 ## Limitations
 
