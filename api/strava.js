@@ -1,3 +1,6 @@
+import { createHash, timingSafeEqual } from "node:crypto";
+import process from "node:process";
+
 // Strava doesn't publish its GAP model or return GAP for laps. These constants are fitted
 // to Strava's own GAP values, so re-check them against real activities if changing them.
 const GRADE_SMOOTHING_SAMPLES = 21;
@@ -46,10 +49,37 @@ function netElevation(altitude, startIndex, endIndex) {
   return Math.round(end - start);
 }
 
+function sha256(value) {
+  return createHash("sha256").update(value).digest();
+}
+
+function isAuthorized(req, password) {
+  const supplied = (req.headers.authorization || "").replace(/^Bearer /, "");
+  return timingSafeEqual(sha256(supplied), sha256(password));
+}
+
+function pick(source, keys) {
+  return Object.fromEntries(keys.map(key => [key, source[key]]));
+}
+
+const ACTIVITY_FIELDS = [
+  "start_date_local", "name", "description", "distance", "moving_time", "average_speed",
+  "suffer_score", "calories", "elapsed_time", "average_cadence", "workout_type", "tags", "commute",
+];
+const SPLIT_FIELDS = ["distance", "average_grade_adjusted_speed"];
+const LAP_FIELDS = ["lap_index", "distance", "moving_time", "average_speed", "average_heartrate"];
+
 export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  if (req.method === "OPTIONS") return res.status(200).end();
+  const { APP_PASSWORD } = process.env;
+  if (!APP_PASSWORD) {
+    return res.status(503).json({ error: "APP_PASSWORD is not configured on the server." });
+  }
+  if (!isAuthorized(req, APP_PASSWORD)) {
+    return res.status(401).json({ error: "Incorrect password." });
+  }
+  if (req.method !== "GET") {
+    return res.status(405).json({ error: "Method not allowed." });
+  }
 
   const { activityId } = req.query;
   if (!activityId || !/^\d+$/.test(activityId)) {
@@ -122,8 +152,11 @@ export default async function handler(req, res) {
       : [];
 
     return res.status(200).json({
-      activity,
-      laps,
+      activity: {
+        ...pick(activity, ACTIVITY_FIELDS),
+        splits_metric: (activity.splits_metric || []).map(split => pick(split, SPLIT_FIELDS)),
+      },
+      laps: Array.isArray(laps) ? laps.map(lap => pick(lap, LAP_FIELDS)) : [],
       lapMetrics,
       elevationGain,
     });

@@ -16,6 +16,19 @@ async function copyToClipboard(text) {
 }
 
 // ─── Strava URL helpers ───────────────────────────────────────────────────────
+const PASSWORD_KEY = "strava-formatter-password";
+
+function loadPassword() {
+  try { return localStorage.getItem(PASSWORD_KEY) || ""; } catch { return ""; }
+}
+
+function savePassword(value) {
+  try {
+    if (value) localStorage.setItem(PASSWORD_KEY, value);
+    else localStorage.removeItem(PASSWORD_KEY);
+  } catch { /* storage blocked: the password just won't be remembered */ }
+}
+
 const STRAVA_URL_RE = /strava\.com\/activities\/(\d+)/i;
 
 function extractActivityId(url) {
@@ -263,6 +276,7 @@ Elapsed Time5:46`;
 export default function App() {
   const [tab,        setTab]        = useState("url");
   const [urlInput,   setUrlInput]   = useState("");
+  const [password,   setPassword]   = useState(loadPassword);
   const [pasteInput, setPasteInput] = useState("");
   const [urlParsed,  setUrlParsed]  = useState(null);   // { header, title, ... }
   const [loading,    setLoading]    = useState(false);
@@ -295,15 +309,19 @@ export default function App() {
 
   const handleFetch = async () => {
     const id = extractActivityId(urlInput.trim());
-    if (!id) return;
+    if (!id || !password) return;
     setLoading(true);
     setError("");
     setUrlParsed(null);
     setCopyState("idle");
     try {
-      const res = await fetch(`/api/strava?activityId=${id}`);
+      const res = await fetch(`/api/strava?activityId=${id}`, {
+        headers: { Authorization: `Bearer ${password}` },
+      });
       const data = await res.json();
+      if (res.status === 401) savePassword("");
       if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+      savePassword(password);
       setUrlParsed(buildFromApi(data.activity, data.laps, data.elevationGain, data.lapMetrics));
     } catch (e) {
       setError(e.message || "Something went wrong.");
@@ -428,7 +446,16 @@ export default function App() {
                   placeholder="https://www.strava.com/activities/..."
                   spellCheck={false}
                 />
-                <button className="sf-fetch-btn" onClick={handleFetch} disabled={!isValidUrl || loading}>
+                <input
+                  className="sf-url-input"
+                  type="password"
+                  value={password}
+                  onChange={e => { setPassword(e.target.value); setError(""); }}
+                  onKeyDown={e => e.key === "Enter" && handleFetch()}
+                  placeholder="Password"
+                  autoComplete="current-password"
+                />
+                <button className="sf-fetch-btn" onClick={handleFetch} disabled={!isValidUrl || !password || loading}>
                   {loading ? (
                     <>
                       <svg className="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
@@ -443,7 +470,7 @@ export default function App() {
                 </button>
                 {error && <div className="sf-error">⚠ {error}</div>}
                 <div className="sf-note">
-                  <strong>Note:</strong> requires Strava API credentials configured as environment variables. See the README for setup instructions.
+                  <strong>Note:</strong> the password is the <code>APP_PASSWORD</code> value set in Vercel. It's remembered in this browser after a successful fetch.
                 </div>
               </div>
             ) : (

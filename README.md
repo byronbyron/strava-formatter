@@ -64,12 +64,19 @@ The overall **Grade Adjusted Pace** stat is Strava's own figure, combined from t
 
 **The per-lap GAP values are estimates.** Strava doesn't publish its model, so the app uses a formula fitted to Strava's values on two runs. On two other runs it was typically within about 3 s/km of Strava's per-km splits, and within 7 s/km at worst. Short, steep laps can be further out. Use the pasted lap table when you need Strava's exact per-lap figures.
 
-This requires a Strava API application and three environment variables (set in Vercel, or in `.env.local` for local dev via `vercel dev`):
+This requires a Strava API application and four environment variables (set in Vercel, or in `.env.local` for local dev via `vercel dev`):
 
 ```
 STRAVA_CLIENT_ID=...
 STRAVA_CLIENT_SECRET=...
 STRAVA_REFRESH_TOKEN=...
+APP_PASSWORD=...
+```
+
+`APP_PASSWORD` protects `api/strava.js`, which uses your Strava token. Requests must send it as `Authorization: Bearer <password>`, and the route rejects everything if it isn't set. There's no rate limiting, so use a long random value:
+
+```bash
+openssl rand -base64 24
 ```
 
 The refresh token needs `activity:read` (or `activity:read_all` for private activities) scope. Without these set, the Activity URL tab will show an error — the Paste stats tab works fine without it.
