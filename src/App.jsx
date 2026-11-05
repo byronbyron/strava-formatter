@@ -16,19 +16,6 @@ async function copyToClipboard(text) {
 }
 
 // ─── Strava URL helpers ───────────────────────────────────────────────────────
-const PASSWORD_KEY = "strava-formatter-password";
-
-function loadPassword() {
-  try { return localStorage.getItem(PASSWORD_KEY) || ""; } catch { return ""; }
-}
-
-function savePassword(value) {
-  try {
-    if (value) localStorage.setItem(PASSWORD_KEY, value);
-    else localStorage.removeItem(PASSWORD_KEY);
-  } catch { /* storage blocked: the password just won't be remembered */ }
-}
-
 const STRAVA_URL_RE = /strava\.com\/activities\/(\d+)/i;
 
 function extractActivityId(url) {
@@ -139,87 +126,7 @@ function buildFromApi(activity, laps, elevationGain, lapMetrics) {
   return { header, title, description: desc, stats, lapTable };
 }
 
-// ─── Paste parser (unchanged) ─────────────────────────────────────────────────
-const NOISE = [
-  /^strava labs$/i, /^view flybys$/i, /^share$/i,
-  /^give kudos$/i, /^similar activities$/i,
-  /^segment efforts$/i, /^achievements$/i,
-  /^this activity is private/i,
-];
-function isNoise(line) { return NOISE.some(r => r.test(line.trim())); }
-
-const RE = {
-  header:      /^\d{1,2}:\d{2}\s+on\s+\w+,\s+\d+\s+\w+\s+\d{4}/,
-  distance:    /^(\d+\.?\d*)\s*km$/,
-  movingTime:  /^(\d+:\d{2}(:\d{2})?)$/,
-  pace:        /^\d+:\d{2}\s*\/km$/,
-  effort:      /^\d{1,4}$/,
-  cadence:     /^(\d{2,3})\s*spm$/i,
-  lapHeader:   /^Lap[\s\t]+Distance/,
-};
-
-function parseStrava(raw) {
-  const lines = raw.split("\n").map(l => l.trimEnd());
-  let hi = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (RE.header.test(lines[i].trim())) { hi = i; break; }
-  }
-  if (hi === -1) return null;
-
-  const header = lines[hi].trim();
-  let title = "", ti = hi + 1;
-  while (ti < lines.length) {
-    const t = lines[ti].trim();
-    if (t && !isNoise(t)) { title = t; ti++; break; }
-    ti++;
-  }
-
-  let descLines = [], statsStart = -1;
-  for (let i = ti; i < lines.length; i++) {
-    const t = lines[i].trim();
-    if (!t || isNoise(t)) continue;
-    if (RE.distance.test(t) || RE.movingTime.test(t)) { statsStart = i; break; }
-    descLines.push(t);
-  }
-
-  const stats = {};
-  let lapTable = "";
-
-  if (statsStart !== -1) {
-    const rawLines = lines.slice(statsStart);
-    let lapStart = -1;
-    for (let i = 0; i < rawLines.length; i++) {
-      if (RE.lapHeader.test(rawLines[i].trim())) { lapStart = i; break; }
-    }
-    const statsLines = lapStart === -1 ? rawLines : rawLines.slice(0, lapStart);
-    if (lapStart !== -1) lapTable = rawLines.slice(lapStart).map(l => l.trimEnd()).join("\n").trim();
-    const blob = statsLines.map(l => l.trim()).filter(Boolean).join("\n");
-    const flat = statsLines.map(l => l.trim()).filter(Boolean);
-
-    const dm = flat.find(l => RE.distance.test(l));    if (dm) stats.distance = dm;
-    const tl = flat.filter(l => RE.movingTime.test(l) && !RE.pace.test(l));
-    if (tl.length) stats.movingTime = tl[0];
-    const pm = flat.find(l => RE.pace.test(l));        if (pm) stats.avgPace = pm;
-    const em = flat.find(l => RE.effort.test(l) && parseInt(l) < 1000); if (em) stats.relativeEffort = em;
-
-    const ecM = blob.replace(/\n/g, "").match(/Elevation([\d,]+)\s*m.*?Calories([\d,]+)/);
-    if (ecM) { stats.elevation = ecM[1] + " m"; stats.calories = ecM[2]; }
-    else {
-      const el = flat.find(l => /^Elevation\d/i.test(l));
-      if (el) { const m = el.match(/Elevation([\d,]+)\s*m/i); if (m) stats.elevation = m[1] + " m"; }
-      const cl = flat.find(l => /^Calories\d/i.test(l));
-      if (cl) { const m = cl.match(/Calories([\d,]+)/i); if (m) stats.calories = m[1]; }
-    }
-
-    const etM = blob.replace(/\n/g, "").match(/Elapsed\s*Time(\d+:\d{2}(?::\d{2})?)/i);
-    if (etM) stats.elapsedTime = etM[1];
-    const cadL = flat.find(l => RE.cadence.test(l)); if (cadL) stats.cadence = cadL;
-  }
-
-  return { header, title, description: descLines.join("\n"), stats, lapTable };
-}
-
-// ─── Shared formatter ─────────────────────────────────────────────────────────
+// ─── Output formatter ─────────────────────────────────────────────────────────
 function formatOutput({ header, title, description, stats, lapTable }) {
   const lines = [header, ""];
   if (title)       { lines.push(title); lines.push(""); }
@@ -232,7 +139,6 @@ function formatOutput({ header, title, description, stats, lapTable }) {
   if (stats.gradeAdjustedPace) lines.push(`Grade Adjusted Pace: ${stats.gradeAdjustedPace}`);
   if (stats.relativeEffort)    lines.push(`Relative Effort: ${stats.relativeEffort}`);
   if (stats.elevationGain)     lines.push(`Elevation Gain: ${stats.elevationGain}`);
-  else if (stats.elevation)    lines.push(`Elevation Gain: +${stats.elevation}`);
   if (stats.calories)          lines.push(`Calories: ${stats.calories}`);
   if (stats.elapsedTime)       lines.push(`Elapsed Time: ${stats.elapsedTime}`);
   if (stats.cadence)           lines.push(`Avg Cadence: ${stats.cadence}`);
@@ -256,42 +162,18 @@ function StatRow({ label, value }) {
   );
 }
 
-// ─── Placeholder ──────────────────────────────────────────────────────────────
-const PASTE_PLACEHOLDER = `18:21 on Wednesday, 20 May 2026 Rotherham, United Kingdom
-Warm Up
-
-Strava Labs
-View Flybys
-0.95 km
-
-5:11
-
-5:26 /km
-
-5
-Elevation1 mCalories68
-Elapsed Time5:46`;
-
 // ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [tab,        setTab]        = useState("url");
-  const [urlInput,   setUrlInput]   = useState("");
-  const [password,   setPassword]   = useState(loadPassword);
-  const [pasteInput, setPasteInput] = useState("");
-  const [urlParsed,  setUrlParsed]  = useState(null);   // { header, title, ... }
-  const [loading,    setLoading]    = useState(false);
-  const [error,      setError]      = useState("");
-  const [copyState,  setCopyState]  = useState("idle"); // idle | success | fail
+  const [urlInput,  setUrlInput]  = useState("");
+  const [parsed,    setParsed]    = useState(null);   // { header, title, ... }
+  const [loading,   setLoading]   = useState(false);
+  const [error,     setError]     = useState("");
+  const [copyState, setCopyState] = useState("idle"); // idle | success | fail
 
-  const pasteParsed = pasteInput.trim() ? parseStrava(pasteInput) : null;
-  const pasteOutput = pasteParsed ? formatOutput(pasteParsed) : null;
+  const output = parsed ? formatOutput(parsed) : null;
 
-  const urlOutput   = urlParsed  ? formatOutput(urlParsed)  : null;
-  const activeOutput = tab === "url" ? urlOutput : pasteOutput;
-  const activeParsed = tab === "url" ? urlParsed : pasteParsed;
-
-  const preview = activeParsed ? (() => {
-    const { header, title, description, stats, lapTable } = activeParsed;
+  const preview = parsed ? (() => {
+    const { header, title, description, stats, lapTable } = parsed;
     const rows = [];
     if (stats.tag)               rows.push(["Tag",                  stats.tag]);
     if (stats.distance)          rows.push(["Distance",             stats.distance]);
@@ -300,7 +182,6 @@ export default function App() {
     if (stats.gradeAdjustedPace) rows.push(["Grade Adjusted Pace",  stats.gradeAdjustedPace]);
     if (stats.relativeEffort)    rows.push(["Relative Effort",      stats.relativeEffort]);
     if (stats.elevationGain)     rows.push(["Elevation Gain",       stats.elevationGain]);
-    else if (stats.elevation)    rows.push(["Elevation Gain",       `+${stats.elevation}`]);
     if (stats.calories)          rows.push(["Calories",             stats.calories]);
     if (stats.elapsedTime)       rows.push(["Elapsed Time",         stats.elapsedTime]);
     if (stats.cadence)           rows.push(["Avg Cadence",          stats.cadence]);
@@ -309,20 +190,16 @@ export default function App() {
 
   const handleFetch = async () => {
     const id = extractActivityId(urlInput.trim());
-    if (!id || !password) return;
+    if (!id) return;
     setLoading(true);
     setError("");
-    setUrlParsed(null);
+    setParsed(null);
     setCopyState("idle");
     try {
-      const res = await fetch(`/api/strava?activityId=${id}`, {
-        headers: { Authorization: `Bearer ${password}` },
-      });
+      const res = await fetch(`/api/strava?activityId=${id}`);
       const data = await res.json();
-      if (res.status === 401) savePassword("");
       if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
-      savePassword(password);
-      setUrlParsed(buildFromApi(data.activity, data.laps, data.elevationGain, data.lapMetrics));
+      setParsed(buildFromApi(data.activity, data.laps, data.elevationGain, data.lapMetrics));
     } catch (e) {
       setError(e.message || "Something went wrong.");
     } finally {
@@ -331,31 +208,15 @@ export default function App() {
   };
 
   const handleCopy = useCallback(async () => {
-    if (!activeOutput) return;
-    const ok = await copyToClipboard(activeOutput);
+    if (!output) return;
+    const ok = await copyToClipboard(output);
     setCopyState(ok ? "success" : "fail");
     setTimeout(() => setCopyState("idle"), 2000);
-  }, [activeOutput]);
+  }, [output]);
 
   const isValidUrl  = !!extractActivityId(urlInput.trim());
-  const badPaste    = pasteInput.trim() && !pasteParsed;
   const copyLabel   = copyState === "success" ? "Copied!" : copyState === "fail" ? "Failed" : "Copy";
   const copyColor   = copyState === "success" ? "#4ade80" : copyState === "fail" ? "#f87171" : "#FC4C02";
-
-  const tabBtn = (t, icon, label) => (
-    <button onClick={() => setTab(t)} style={{
-      fontSize: "13px", fontWeight: tab === t ? 600 : 400,
-      padding: "6px 14px", cursor: "pointer",
-      color: tab === t ? "#f0f0f0" : "#555",
-      background: "none", border: "none",
-      borderBottom: tab === t ? "2px solid #FC4C02" : "2px solid transparent",
-      marginBottom: "-1px", fontFamily: "'Barlow Condensed', sans-serif",
-      letterSpacing: "0.06em", textTransform: "uppercase",
-    }}>
-      {icon}
-      {label}
-    </button>
-  );
 
   return (
     <>
@@ -377,10 +238,6 @@ export default function App() {
         .sf-panel { background: #161616; border: 1px solid #2a2a2a; border-radius: 10px; overflow: hidden; }
         .sf-panel-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid #2a2a2a; background: #111; }
         .sf-panel-label { font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #555; }
-        .sf-tabs { border-bottom: 1px solid #2a2a2a; background: #111; padding: 0 12px; display: flex; gap: 2px; }
-        .sf-textarea { width: 100%; height: 500px; resize: none; background: transparent; border: none; outline: none; padding: 16px; font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.7; color: #aaa; caret-color: #FC4C02; display: block; }
-        .sf-textarea::placeholder { color: #2e2e2e; }
-        .sf-textarea:focus { color: #ddd; }
         .sf-url-body { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
         .sf-url-input { width: 100%; padding: 10px 14px; background: #111; border: 1px solid #2a2a2a; border-radius: 7px; outline: none; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #ccc; caret-color: #FC4C02; transition: border-color 0.15s; }
         .sf-url-input:focus { border-color: #FC4C02; }
@@ -390,8 +247,6 @@ export default function App() {
         .sf-fetch-btn:disabled { opacity: 0.35; cursor: default; }
         .sf-copy-btn { display: flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 5px; cursor: pointer; font-family: 'Barlow Condensed', sans-serif; font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; transition: all 0.15s ease; }
         .sf-copy-btn:disabled { opacity: 0.3; cursor: default; }
-        .sf-clear-btn { background: none; border: none; cursor: pointer; font-family: 'Barlow Condensed', sans-serif; font-size: 11px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #555; padding: 3px 8px; border-radius: 4px; transition: color 0.15s; }
-        .sf-clear-btn:hover { color: #aaa; }
         .sf-preview { height: 554px; overflow-y: auto; padding: 16px; }
         .sf-preview::-webkit-scrollbar { width: 4px; }
         .sf-preview::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
@@ -424,78 +279,38 @@ export default function App() {
 
           {/* ── Left panel ── */}
           <div className="sf-panel">
-            <div className="sf-tabs">
-              {tabBtn("url",
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{marginRight:6,verticalAlign:"-2px"}}><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>,
-                "Activity URL"
-              )}
-              {tabBtn("paste",
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{marginRight:6,verticalAlign:"-2px"}}><path d="M9 2h6a1 1 0 011 1v1H8V3a1 1 0 011-1z"/><rect x="4" y="4" width="16" height="18" rx="2"/><line x1="8" y1="10" x2="16" y2="10"/><line x1="8" y1="14" x2="16" y2="14"/><line x1="8" y1="18" x2="12" y2="18"/></svg>,
-                "Paste stats"
-              )}
+            <div className="sf-panel-header">
+              <span className="sf-panel-label">Activity URL</span>
             </div>
 
-            {tab === "url" ? (
-              <div className="sf-url-body">
-                <input
-                  className="sf-url-input"
-                  type="url"
-                  value={urlInput}
-                  onChange={e => { setUrlInput(e.target.value); setError(""); }}
-                  onKeyDown={e => e.key === "Enter" && handleFetch()}
-                  placeholder="https://www.strava.com/activities/..."
-                  spellCheck={false}
-                />
-                <input
-                  className="sf-url-input"
-                  type="password"
-                  value={password}
-                  onChange={e => { setPassword(e.target.value); setError(""); }}
-                  onKeyDown={e => e.key === "Enter" && handleFetch()}
-                  placeholder="Password"
-                  autoComplete="current-password"
-                />
-                <button className="sf-fetch-btn" onClick={handleFetch} disabled={!isValidUrl || !password || loading}>
-                  {loading ? (
-                    <>
-                      <svg className="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
-                      Fetching…
-                    </>
-                  ) : (
-                    <>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.88 18.09A5 5 0 0018 9h-1.26A8 8 0 103 16.29"/></svg>
-                      Fetch activity
-                    </>
-                  )}
-                </button>
-                {error && <div className="sf-error">⚠ {error}</div>}
-                <div className="sf-note">
-                  <strong>Note:</strong> the password is the <code>APP_PASSWORD</code> value set in Vercel. It's remembered in this browser after a successful fetch.
-                </div>
-              </div>
-            ) : (
-              <div style={{ position: "relative" }}>
-                {pasteInput && (
-                  <button className="sf-clear-btn" onClick={() => setPasteInput("")}
-                    style={{ position: "absolute", top: 10, right: 12, zIndex: 1 }}>
-                    Clear
-                  </button>
+            <div className="sf-url-body">
+              <input
+                className="sf-url-input"
+                type="url"
+                value={urlInput}
+                onChange={e => { setUrlInput(e.target.value); setError(""); }}
+                onKeyDown={e => e.key === "Enter" && handleFetch()}
+                placeholder="https://www.strava.com/activities/..."
+                spellCheck={false}
+              />
+              <button className="sf-fetch-btn" onClick={handleFetch} disabled={!isValidUrl || loading}>
+                {loading ? (
+                  <>
+                    <svg className="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+                    Fetching…
+                  </>
+                ) : (
+                  <>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.88 18.09A5 5 0 0018 9h-1.26A8 8 0 103 16.29"/></svg>
+                    Fetch activity
+                  </>
                 )}
-                <textarea
-                  className="sf-textarea"
-                  value={pasteInput}
-                  onChange={e => setPasteInput(e.target.value)}
-                  placeholder={PASTE_PLACEHOLDER}
-                  spellCheck={false}
-                />
-                {badPaste && (
-                  <div style={{ margin: "0 16px 12px", fontSize: "12px", color: "#f87171",
-                    fontFamily: "'JetBrains Mono', monospace" }}>
-                    ⚠ Couldn't find a Strava header. Make sure the date/time line is included.
-                  </div>
-                )}
+              </button>
+              {error && <div className="sf-error">⚠ {error}</div>}
+              <div className="sf-note">
+                <strong>Note:</strong> only activities set to public on Strava can be fetched.
               </div>
-            )}
+            </div>
           </div>
 
           {/* ── Right panel ── */}
@@ -505,7 +320,7 @@ export default function App() {
               <button
                 className="sf-copy-btn"
                 onClick={handleCopy}
-                disabled={!activeOutput}
+                disabled={!output}
                 style={{ color: copyColor, border: `1px solid ${copyColor}66`, background: `${copyColor}14` }}
               >
                 {copyState === "success" ? (

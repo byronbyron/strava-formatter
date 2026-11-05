@@ -1,4 +1,3 @@
-import { createHash, timingSafeEqual } from "node:crypto";
 import process from "node:process";
 
 // Strava doesn't publish its GAP model or return GAP for laps. These constants are fitted
@@ -49,15 +48,6 @@ function netElevation(altitude, startIndex, endIndex) {
   return Math.round(end - start);
 }
 
-function sha256(value) {
-  return createHash("sha256").update(value).digest();
-}
-
-function isAuthorized(req, password) {
-  const supplied = (req.headers.authorization || "").replace(/^Bearer /, "");
-  return timingSafeEqual(sha256(supplied), sha256(password));
-}
-
 function pick(source, keys) {
   return Object.fromEntries(keys.map(key => [key, source[key]]));
 }
@@ -70,13 +60,6 @@ const SPLIT_FIELDS = ["distance", "average_grade_adjusted_speed"];
 const LAP_FIELDS = ["lap_index", "distance", "moving_time", "average_speed", "average_heartrate"];
 
 export default async function handler(req, res) {
-  const { APP_PASSWORD } = process.env;
-  if (!APP_PASSWORD) {
-    return res.status(503).json({ error: "APP_PASSWORD is not configured on the server." });
-  }
-  if (!isAuthorized(req, APP_PASSWORD)) {
-    return res.status(401).json({ error: "Incorrect password." });
-  }
   if (req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed." });
   }
@@ -133,6 +116,12 @@ export default async function handler(req, res) {
     }
 
     const activity = await activityRes.json();
+
+    // The route has no login, so never serve anything that isn't already public on Strava.
+    if (activity.visibility !== "everyone" || activity.private !== false) {
+      return res.status(403).json({ error: "Only activities set to public on Strava can be fetched." });
+    }
+
     const laps = lapsRes.ok ? await lapsRes.json() : [];
     const streams = streamsRes.ok ? await streamsRes.json() : {};
 
