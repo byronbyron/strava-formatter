@@ -109,8 +109,8 @@ Any subsequent `git push` to `master` will trigger an automatic redeploy.
 ## Usage
 
 1. Copy the activity's URL from Strava (e.g. `https://www.strava.com/activities/12345678901`)
-2. Paste it into the field and click **Fetch activity**
-3. Click **Copy** to copy the formatted output
+2. Paste it into the field, and the activity is fetched straight away (or type it and click **Fetch**)
+3. Click **Copy text** to copy the formatted output
 
 ## Limitations
 

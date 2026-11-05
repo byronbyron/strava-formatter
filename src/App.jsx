@@ -1,9 +1,10 @@
-import { useState, useCallback } from "react";
+import { useRef, useState } from "react";
+import "./App.css";
 
 // ─── Clipboard helper ─────────────────────────────────────────────────────────
 async function copyToClipboard(text) {
   if (navigator?.clipboard?.writeText) {
-    try { await navigator.clipboard.writeText(text); return true; } catch {}
+    try { await navigator.clipboard.writeText(text); return true; } catch { /* fall back to execCommand */ }
   }
   const ta = document.createElement("textarea");
   ta.value = text;
@@ -87,6 +88,8 @@ function overallGapSecPerKm(activity) {
   return seconds / (metres / 1000);
 }
 
+const LAP_COLUMNS = ["Lap", "Distance", "Time", "Pace", "GAP", "Elev", "HR"];
+
 function buildFromApi(activity, laps, elevationGain, lapMetrics) {
   const header = activity.start_date_local ? formatDateLocal(activity.start_date_local) : "";
   const title  = activity.name || "";
@@ -107,23 +110,23 @@ function buildFromApi(activity, laps, elevationGain, lapMetrics) {
                                             ? `${Math.round(activity.average_cadence * 2)} spm` : null,
   };
 
-  let lapTable = "";
-  if (Array.isArray(laps) && laps.length > 0) {
-    const rows = laps.map((lap, i) => {
-      const metrics  = lapMetrics?.[i];
-      const idx      = String(lap.lap_index).padStart(3);
-      const dist     = metresToKm(lap.distance);
-      const time     = lapTime(lap.moving_time);
-      const pace     = mpsToMinKm(lap.average_speed) || "";
-      const gap      = formatPaceFromSeconds(metrics?.gradeAdjustedPaceSecPerKm) || "";
-      const elev     = metrics?.elevation != null ? `${metrics.elevation} m` : "";
-      const hr       = lap.average_heartrate ? `${Math.round(lap.average_heartrate)} bpm` : "";
-      return `${idx}\t${dist}\t${time}\t${pace}\t${gap}\t${elev}\t${hr}`;
-    });
-    lapTable = "Lap\tDistance\tTime\tPace\tGAP\tElev\tHR\n" + rows.join("\n");
-  }
+  const lapRows = (Array.isArray(laps) ? laps : []).map((lap, i) => {
+    const metrics = lapMetrics?.[i];
+    return [
+      String(lap.lap_index).padStart(3),
+      metresToKm(lap.distance),
+      lapTime(lap.moving_time),
+      mpsToMinKm(lap.average_speed) || "",
+      formatPaceFromSeconds(metrics?.gradeAdjustedPaceSecPerKm) || "",
+      metrics?.elevation != null ? `${metrics.elevation} m` : "",
+      lap.average_heartrate ? `${Math.round(lap.average_heartrate)} bpm` : "",
+    ];
+  });
+  const lapTable = lapRows.length
+    ? [LAP_COLUMNS, ...lapRows].map(row => row.join("\t")).join("\n")
+    : "";
 
-  return { header, title, description: desc, stats, lapTable };
+  return { header, title, description: desc, stats, lapRows, lapTable };
 }
 
 // ─── Output formatter ─────────────────────────────────────────────────────────
@@ -147,230 +150,244 @@ function formatOutput({ header, title, description, stats, lapTable }) {
   return lines.join("\n");
 }
 
-// ─── Stat row ─────────────────────────────────────────────────────────────────
-function StatRow({ label, value }) {
+// ─── UI ───────────────────────────────────────────────────────────────────────
+const PRIMARY_STATS = [
+  ["Distance", "distance"],
+  ["Moving Time", "movingTime"],
+  ["Avg Pace", "avgPace"],
+  ["Grade Adjusted Pace", "gradeAdjustedPace"],
+];
+const SECONDARY_STATS = [
+  ["Elevation Gain", "elevationGain"],
+  ["Elapsed Time", "elapsedTime"],
+  ["Relative Effort", "relativeEffort"],
+  ["Calories", "calories"],
+  ["Avg Cadence", "cadence"],
+];
+
+function StatList({ items, stats, className }) {
+  const visible = items.filter(([, key]) => stats[key]);
+  if (!visible.length) return null;
   return (
-    <div style={{
-      display: "flex", justifyContent: "space-between", alignItems: "baseline",
-      padding: "5px 0", borderBottom: "1px solid rgba(255,255,255,0.05)",
-    }}>
-      <span style={{ fontSize: "11px", letterSpacing: "0.08em", textTransform: "uppercase",
-        color: "#666", fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 600 }}>{label}</span>
-      <span style={{ fontSize: "13px", color: "#d0d0d0",
-        fontFamily: "'JetBrains Mono', monospace", fontWeight: 400 }}>{value}</span>
+    <dl className={`sf-stats ${className}`}>
+      {visible.map(([label, key]) => (
+        <div className="sf-stat" key={key}>
+          <dt>{label}</dt>
+          <dd>{stats[key]}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+// Units move to the column headings so all seven columns fit on a phone.
+const LAP_HEADINGS = [
+  ["Lap"], ["Dist", "km"], ["Time"], ["Pace", "/km"], ["GAP", "/km"], ["Elev", "m"], ["HR", "bpm"],
+];
+const UNIT_SUFFIX = / (km|\/km|m|bpm)$/;
+
+function elevationClass(value) {
+  if (value.startsWith("-")) return "sf-descent";
+  return value && value !== "0 m" ? "sf-climb" : undefined;
+}
+
+function LapTable({ rows }) {
+  return (
+    <>
+      <h3 className="sf-section-title">Laps</h3>
+      <div className="sf-table-wrap" tabIndex={0} role="region" aria-label="Lap table">
+        <table className="sf-table">
+          <thead>
+            <tr>
+              {LAP_HEADINGS.map(([label, unit]) => (
+                <th key={label} scope="col">{label}{unit && <span className="sf-unit">{unit}</span>}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(row => (
+              <tr key={row[0]}>
+                {row.map((cell, i) => (
+                  <td key={LAP_COLUMNS[i]} className={LAP_COLUMNS[i] === "Elev" ? elevationClass(cell) : undefined}>
+                    {cell.trim().replace(UNIT_SUFFIX, "")}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="sf-footnote">Lap GAP is an estimate. The overall Grade Adjusted Pace is Strava's own figure.</p>
+    </>
+  );
+}
+
+const COPY_LABELS = { idle: "Copy text", success: "Copied", fail: "Couldn't copy" };
+
+function Result({ activity, copyState, onCopy }) {
+  const { header, title, description, stats, lapRows } = activity;
+  return (
+    <article className="sf-card">
+      <div className="sf-result-bar">
+        <span className="sf-result-date">{header}</span>
+        <button
+          type="button"
+          className={`sf-copy ${copyState === "success" ? "is-success" : copyState === "fail" ? "is-fail" : ""}`}
+          onClick={onCopy}
+        >
+          {copyState === "success" ? (
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+          ) : (
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+          )}
+          {COPY_LABELS[copyState]}
+        </button>
+      </div>
+      <div className="sf-result-body">
+        <h2 className="sf-activity-title">{title}</h2>
+        {description && <p className="sf-description">{description}</p>}
+        {stats.tag && (
+          <div className="sf-tags">
+            {stats.tag.split(", ").map(tag => <span className="sf-tag" key={tag}>{tag}</span>)}
+          </div>
+        )}
+        <StatList items={PRIMARY_STATS} stats={stats} className="sf-stats-primary" />
+        <StatList items={SECONDARY_STATS} stats={stats} className="sf-stats-secondary" />
+        {lapRows.length > 0 && <LapTable rows={lapRows} />}
+      </div>
+    </article>
+  );
+}
+
+function Skeleton() {
+  return (
+    <div className="sf-card sf-skeleton" role="status" aria-label="Fetching activity from Strava">
+      <div className="sf-skeleton-title" />
+      <div className="sf-skeleton-tiles"><div /><div /><div /><div /></div>
+      <div className="sf-skeleton-table" />
     </div>
   );
 }
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [urlInput,  setUrlInput]  = useState("");
-  const [parsed,    setParsed]    = useState(null);   // { header, title, ... }
+  const [url,       setUrl]       = useState("");
+  const [activity,  setActivity]  = useState(null);
   const [loading,   setLoading]   = useState(false);
   const [error,     setError]     = useState("");
   const [copyState, setCopyState] = useState("idle"); // idle | success | fail
+  const latestRequest = useRef(0);
+  const copyTimer = useRef(null);
 
-  const output = parsed ? formatOutput(parsed) : null;
-
-  const preview = parsed ? (() => {
-    const { header, title, description, stats, lapTable } = parsed;
-    const rows = [];
-    if (stats.tag)               rows.push(["Tag",                  stats.tag]);
-    if (stats.distance)          rows.push(["Distance",             stats.distance]);
-    if (stats.movingTime)        rows.push(["Moving Time",          stats.movingTime]);
-    if (stats.avgPace)           rows.push(["Avg Pace",             stats.avgPace]);
-    if (stats.gradeAdjustedPace) rows.push(["Grade Adjusted Pace",  stats.gradeAdjustedPace]);
-    if (stats.relativeEffort)    rows.push(["Relative Effort",      stats.relativeEffort]);
-    if (stats.elevationGain)     rows.push(["Elevation Gain",       stats.elevationGain]);
-    if (stats.calories)          rows.push(["Calories",             stats.calories]);
-    if (stats.elapsedTime)       rows.push(["Elapsed Time",         stats.elapsedTime]);
-    if (stats.cadence)           rows.push(["Avg Cadence",          stats.cadence]);
-    return { header, title, description, rows, lapTable };
-  })() : null;
-
-  const handleFetch = async () => {
-    const id = extractActivityId(urlInput.trim());
-    if (!id) return;
+  const load = async id => {
+    const request = ++latestRequest.current;
     setLoading(true);
     setError("");
-    setParsed(null);
+    setActivity(null);
     setCopyState("idle");
     try {
       const res = await fetch(`/api/strava?activityId=${id}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
-      setParsed(buildFromApi(data.activity, data.laps, data.elevationGain, data.lapMetrics));
-    } catch (e) {
-      setError(e.message || "Something went wrong.");
+      const data = await res.json().catch(() => null);
+      if (request !== latestRequest.current) return;
+      if (!res.ok || !data) {
+        setError(data?.error || `Something went wrong (error ${res.status}). Try again.`);
+        return;
+      }
+      setActivity(buildFromApi(data.activity, data.laps, data.elevationGain, data.lapMetrics));
+    } catch {
+      if (request === latestRequest.current) {
+        setError("Couldn't reach the server. Check your connection and try again.");
+      }
     } finally {
-      setLoading(false);
+      if (request === latestRequest.current) setLoading(false);
     }
   };
 
-  const handleCopy = useCallback(async () => {
-    if (!output) return;
-    const ok = await copyToClipboard(output);
-    setCopyState(ok ? "success" : "fail");
-    setTimeout(() => setCopyState("idle"), 2000);
-  }, [output]);
+  const handleSubmit = e => {
+    e.preventDefault();
+    const value = url.trim();
+    if (!value) {
+      setError("Paste a Strava activity link first.");
+      return;
+    }
+    const id = extractActivityId(value);
+    if (!id) {
+      setError("That doesn't look like an activity link. It should look like https://www.strava.com/activities/12345678901");
+      return;
+    }
+    load(id);
+  };
 
-  const isValidUrl  = !!extractActivityId(urlInput.trim());
-  const copyLabel   = copyState === "success" ? "Copied!" : copyState === "fail" ? "Failed" : "Copy";
-  const copyColor   = copyState === "success" ? "#4ade80" : copyState === "fail" ? "#f87171" : "#FC4C02";
+  const handlePaste = e => {
+    const pasted = e.clipboardData.getData("text").trim();
+    const id = extractActivityId(pasted);
+    if (!id) return;
+    e.preventDefault();
+    setUrl(pasted);
+    load(id);
+  };
+
+  const handleCopy = async () => {
+    const ok = await copyToClipboard(formatOutput(activity));
+    setCopyState(ok ? "success" : "fail");
+    clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setCopyState("idle"), 2000);
+  };
 
   return (
-    <>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        .sf-root {
-          min-height: 100vh;
-          background: #0d0d0d;
-          background-image: radial-gradient(ellipse 80% 50% at 50% -10%, rgba(252,76,2,0.12) 0%, transparent 60%);
-          padding: 28px 24px 48px;
-          font-family: 'Barlow Condensed', sans-serif;
-        }
-        .sf-header { display: flex; align-items: center; gap: 12px; margin-bottom: 28px; }
-        .sf-logo { width: 32px; height: 32px; background: #FC4C02; border-radius: 6px; display: flex; align-items: center; justify-content: center; }
-        .sf-title { font-size: 22px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #f0f0f0; }
-        .sf-title span { color: #FC4C02; }
-        .sf-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 20px; }
-        .sf-panel { background: #161616; border: 1px solid #2a2a2a; border-radius: 10px; overflow: hidden; }
-        .sf-panel-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid #2a2a2a; background: #111; }
-        .sf-panel-label { font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #555; }
-        .sf-url-body { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-        .sf-url-input { width: 100%; padding: 10px 14px; background: #111; border: 1px solid #2a2a2a; border-radius: 7px; outline: none; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #ccc; caret-color: #FC4C02; transition: border-color 0.15s; }
-        .sf-url-input:focus { border-color: #FC4C02; }
-        .sf-url-input::placeholder { color: #333; }
-        .sf-fetch-btn { padding: 9px 18px; background: #FC4C02; border: none; border-radius: 7px; cursor: pointer; font-family: 'Barlow Condensed', sans-serif; font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: white; display: flex; align-items: center; gap: 8px; transition: opacity 0.15s, background 0.15s; align-self: flex-start; }
-        .sf-fetch-btn:hover:not(:disabled) { background: #e04400; }
-        .sf-fetch-btn:disabled { opacity: 0.35; cursor: default; }
-        .sf-copy-btn { display: flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 5px; cursor: pointer; font-family: 'Barlow Condensed', sans-serif; font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; transition: all 0.15s ease; }
-        .sf-copy-btn:disabled { opacity: 0.3; cursor: default; }
-        .sf-preview { height: 554px; overflow-y: auto; padding: 16px; }
-        .sf-preview::-webkit-scrollbar { width: 4px; }
-        .sf-preview::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
-        .sf-preview-header { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #FC4C02; margin-bottom: 4px; line-height: 1.5; }
-        .sf-preview-title { font-size: 20px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; color: #f0f0f0; margin-bottom: 4px; }
-        .sf-preview-desc { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #666; margin-bottom: 14px; line-height: 1.6; }
-        .sf-divider { height: 1px; background: linear-gradient(to right, #FC4C02, transparent); margin: 12px 0; opacity: 0.4; }
-        .sf-section-label { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: #FC4C02; margin-bottom: 6px; opacity: 0.8; }
-        .sf-lap-table { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #888; white-space: pre; tab-size: 10; overflow-x: auto; background: #111; border: 1px solid #222; border-radius: 6px; padding: 10px 12px; margin-top: 8px; line-height: 1.7; }
-        .sf-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 10px; }
-        .sf-empty-text { font-size: 12px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #2d2d2d; }
-        .sf-error { padding: 10px 12px; background: rgba(248,113,113,0.08); border: 1px solid rgba(248,113,113,0.2); border-radius: 6px; font-size: 12px; color: #f87171; font-family: 'JetBrains Mono', monospace; line-height: 1.5; }
-        .sf-note { padding: 10px 14px; background: rgba(252,76,2,0.06); border: 1px solid rgba(252,76,2,0.15); border-radius: 7px; font-size: 12px; color: #888; line-height: 1.6; }
-        .sf-note strong { color: #FC4C02; font-weight: 600; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .spin { animation: spin 0.9s linear infinite; }
-      `}</style>
-
-      <div className="sf-root">
-        <div className="sf-header">
-          <div className="sf-logo">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="white">
-              <path d="M15.387 17.944l-2.089-4.116h-3.065L15.387 24l5.15-10.172h-3.066l-2.084 4.116zM8.163 5.846l2.256-4.43L16.878 14H20L10.42 0 0 14h3.134L8.163 5.846z"/>
-            </svg>
-          </div>
+    <main className="sf-page">
+      <header className="sf-header">
+        <div className="sf-logo" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="white">
+            <path d="M15.387 17.944l-2.089-4.116h-3.065L15.387 24l5.15-10.172h-3.066l-2.084 4.116zM8.163 5.846l2.256-4.43L16.878 14H20L10.42 0 0 14h3.134L8.163 5.846z"/>
+          </svg>
+        </div>
+        <div>
           <h1 className="sf-title">Strava <span>Formatter</span></h1>
+          <p className="sf-tagline">Turn an activity into clean text for your training log.</p>
         </div>
+      </header>
 
-        <div className="sf-grid">
-
-          {/* ── Left panel ── */}
-          <div className="sf-panel">
-            <div className="sf-panel-header">
-              <span className="sf-panel-label">Activity URL</span>
-            </div>
-
-            <div className="sf-url-body">
-              <input
-                className="sf-url-input"
-                type="url"
-                value={urlInput}
-                onChange={e => { setUrlInput(e.target.value); setError(""); }}
-                onKeyDown={e => e.key === "Enter" && handleFetch()}
-                placeholder="https://www.strava.com/activities/..."
-                spellCheck={false}
-              />
-              <button className="sf-fetch-btn" onClick={handleFetch} disabled={!isValidUrl || loading}>
-                {loading ? (
-                  <>
-                    <svg className="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
-                    Fetching…
-                  </>
-                ) : (
-                  <>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.88 18.09A5 5 0 0018 9h-1.26A8 8 0 103 16.29"/></svg>
-                    Fetch activity
-                  </>
-                )}
-              </button>
-              {error && <div className="sf-error">⚠ {error}</div>}
-              <div className="sf-note">
-                <strong>Note:</strong> only activities set to public on Strava can be fetched.
-              </div>
-            </div>
-          </div>
-
-          {/* ── Right panel ── */}
-          <div className="sf-panel">
-            <div className="sf-panel-header">
-              <span className="sf-panel-label">Formatted output</span>
-              <button
-                className="sf-copy-btn"
-                onClick={handleCopy}
-                disabled={!output}
-                style={{ color: copyColor, border: `1px solid ${copyColor}66`, background: `${copyColor}14` }}
-              >
-                {copyState === "success" ? (
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                ) : (
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-                )}
-                {copyLabel}
-              </button>
-            </div>
-
-            <div className="sf-preview">
-              {preview ? (
-                <>
-                  <div className="sf-preview-header">{preview.header}</div>
-                  {preview.title && <div className="sf-preview-title">{preview.title}</div>}
-                  {preview.description && <div className="sf-preview-desc">{preview.description}</div>}
-                  {preview.rows.length > 0 && (
-                    <>
-                      <div className="sf-divider" />
-                      <div className="sf-section-label">Stats</div>
-                      {preview.rows.map(([l, v]) => <StatRow key={l} label={l} value={v} />)}
-                    </>
-                  )}
-                  {preview.lapTable && (
-                    <>
-                      <div className="sf-divider" />
-                      <div className="sf-section-label">Laps</div>
-                      <div className="sf-lap-table">{preview.lapTable}</div>
-                    </>
-                  )}
-                </>
-              ) : loading ? (
-                <div className="sf-empty">
-                  <svg className="spin" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#FC4C02" strokeWidth="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
-                  <span className="sf-empty-text">Fetching from Strava…</span>
-                </div>
-              ) : (
-                <div className="sf-empty">
-                  <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#2d2d2d" strokeWidth="1.5">
-                    <path d="M9 17H7A5 5 0 017 7h2M15 7h2a5 5 0 010 10h-2M8 12h8"/>
-                  </svg>
-                  <span className="sf-empty-text">Output appears here</span>
-                </div>
-              )}
-            </div>
-          </div>
-
+      <form className="sf-form" onSubmit={handleSubmit} noValidate>
+        <label className="sf-label" htmlFor="activity-url">Strava activity link</label>
+        <div className="sf-form-row">
+          <input
+            id="activity-url"
+            className="sf-input"
+            type="url"
+            inputMode="url"
+            value={url}
+            onChange={e => { setUrl(e.target.value); setError(""); }}
+            onPaste={handlePaste}
+            placeholder="https://www.strava.com/activities/…"
+            spellCheck={false}
+            autoComplete="off"
+            autoFocus
+            aria-describedby="activity-url-help"
+            aria-invalid={error ? "true" : undefined}
+          />
+          <button className="sf-button" type="submit" disabled={loading}>
+            {loading ? "Fetching…" : "Fetch"}
+          </button>
         </div>
-      </div>
-    </>
+        <p className="sf-help" id="activity-url-help">Paste a link to fetch it straight away. Public activities only.</p>
+        {error && <p className="sf-error" role="alert">{error}</p>}
+      </form>
+
+      <p className="sf-visually-hidden" role="status">
+        {copyState === "success" ? "Copied to clipboard" : copyState === "fail" ? "Couldn't copy to clipboard" : ""}
+      </p>
+
+      {loading ? (
+        <Skeleton />
+      ) : activity ? (
+        <Result activity={activity} copyState={copyState} onCopy={handleCopy} />
+      ) : !error && (
+        <div className="sf-card sf-empty">
+          <h2>No activity yet</h2>
+          <p>Your stats and lap table will appear here, ready to copy.</p>
+        </div>
+      )}
+    </main>
   );
 }
