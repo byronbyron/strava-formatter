@@ -338,8 +338,9 @@ export default function App() {
     <main className="sf-page">
       <header className="sf-header">
         <div className="sf-logo" aria-hidden="true">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="white">
-            <path d="M15.387 17.944l-2.089-4.116h-3.065L15.387 24l5.15-10.172h-3.066l-2.084 4.116zM8.163 5.846l2.256-4.43L16.878 14H20L10.42 0 0 14h3.134L8.163 5.846z"/>
+          <svg width="40" height="40" viewBox="0 0 64 64" fill="none" stroke="white">
+            <path strokeWidth="9" d="M7 37 23 13 39 37"/>
+            <path strokeWidth="7" d="M38 44 46 55 54 44"/>
           </svg>
         </div>
         <div>
