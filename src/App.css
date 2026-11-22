@@ -6,10 +6,10 @@
   --border: #2e2e2e;
   --text: #f4f4f4;
   --text-muted: #a8a8a8;
-  --orange: #fc4c02;
-  --orange-hover: #ff6a2b;
-  --on-orange: #150500;
-  --climb: #ff9466;
+  --accent: #2dd4bf;
+  --accent-hover: #5eead4;
+  --on-accent: #042f2a;
+  --climb: #fbbf24;
   --descent: #7cc4ff;
   --success: #4ade80;
   --danger: #fca5a5;
@@ -22,7 +22,7 @@
 
 body {
   background: var(--bg);
-  background-image: radial-gradient(ellipse 90% 320px at 50% -60px, rgba(252, 76, 2, 0.16), transparent);
+  background-image: radial-gradient(ellipse 90% 320px at 50% -60px, rgba(45, 212, 191, 0.13), transparent);
   background-repeat: no-repeat;
   color: var(--text);
   font-family: var(--font-body);
@@ -30,7 +30,7 @@ body {
   line-height: 1.5;
 }
 
-:focus-visible { outline: 2px solid var(--orange-hover); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
 
 .sf-page {
   max-width: 760px;
@@ -46,7 +46,7 @@ body {
   height: 40px;
   display: grid;
   place-items: center;
-  background: var(--orange);
+  background: var(--accent);
   border-radius: 9px;
 }
 .sf-title {
@@ -57,7 +57,7 @@ body {
   letter-spacing: 0.03em;
   text-transform: uppercase;
 }
-.sf-title span { color: var(--orange-hover); }
+.sf-title span { color: var(--accent-hover); }
 .sf-tagline { color: var(--text-muted); font-size: 15px; }
 
 .sf-form { margin-bottom: 24px; }
@@ -78,7 +78,7 @@ body {
 }
 .sf-input::placeholder { color: #8c8c8c; }
 .sf-input:hover { border-color: #666; }
-.sf-input:focus { border-color: var(--orange); outline: 1px solid var(--orange); outline-offset: 0; }
+.sf-input:focus { border-color: var(--accent); outline: 1px solid var(--accent); outline-offset: 0; }
 .sf-input[aria-invalid="true"] { border-color: var(--danger); }
 
 .sf-button {
@@ -86,10 +86,10 @@ body {
   height: 48px;
   min-width: 112px;
   padding: 0 20px;
-  background: var(--orange);
+  background: var(--accent);
   border: none;
   border-radius: 9px;
-  color: var(--on-orange);
+  color: var(--on-accent);
   cursor: pointer;
   font-family: var(--font-display);
   font-size: 17px;
@@ -98,7 +98,7 @@ body {
   text-transform: uppercase;
   transition: background 0.15s;
 }
-.sf-button:hover:not(:disabled) { background: var(--orange-hover); }
+.sf-button:hover:not(:disabled) { background: var(--accent-hover); }
 .sf-button:disabled { cursor: progress; opacity: 0.65; }
 
 .sf-help { margin-top: 8px; color: var(--text-muted); font-size: 14px; }
@@ -164,10 +164,10 @@ body {
 .sf-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .sf-tag {
   padding: 3px 10px;
-  background: rgba(252, 76, 2, 0.14);
-  border: 1px solid rgba(252, 76, 2, 0.5);
+  background: rgba(45, 212, 191, 0.12);
+  border: 1px solid rgba(45, 212, 191, 0.45);
   border-radius: 999px;
-  color: #ffb693;
+  color: #99f6e4;
   font-size: 13px;
   font-weight: 600;
 }

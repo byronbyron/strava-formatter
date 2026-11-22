@@ -338,14 +338,15 @@ export default function App() {
     <main className="sf-page">
       <header className="sf-header">
         <div className="sf-logo" aria-hidden="true">
-          <svg width="40" height="40" viewBox="0 0 64 64" fill="none" stroke="white">
-            <path strokeWidth="9" d="M7 37 23 13 39 37"/>
-            <path strokeWidth="7" d="M38 44 46 55 54 44"/>
+          <svg width="40" height="40" viewBox="0 0 64 64" fill="var(--on-accent)">
+            <rect x="13" y="14" width="38" height="9" rx="3"/>
+            <rect x="13" y="28" width="24" height="9" rx="3"/>
+            <rect x="13" y="42" width="31" height="9" rx="3"/>
           </svg>
         </div>
         <div>
-          <h1 className="sf-title">Strava <span>Formatter</span></h1>
-          <p className="sf-tagline">Turn an activity into clean text for your training log.</p>
+          <h1 className="sf-title">Split<span>sheet</span></h1>
+          <p className="sf-tagline">Turn a Strava activity into clean text for your training log.</p>
         </div>
       </header>
 

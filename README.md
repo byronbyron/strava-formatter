@@ -1,4 +1,4 @@
-# Strava Formatter
+# Splitsheet
 
 A minimal web app that turns a Strava activity URL into clean, readable plain text — ready to paste into a training log, notes app, or anywhere else.
 
